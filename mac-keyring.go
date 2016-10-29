@@ -1,11 +1,12 @@
-// +build darwin
+// +build darwin,!ios
 
-package keyring
+package main
 
 /*
-#cgo LDFLAGS: -framework CoreFoundation
+#cgo LDFLAGS: -framework CoreFoundation -framework Security
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
 */
 import "C"
 import (
@@ -16,6 +17,198 @@ import (
 	"unicode/utf8"
 	"unsafe"
 )
+
+// Error int representing an error returned from the mac keyring api
+type Error int
+
+var (
+	ErrorUnimplemented         = Error(C.errSecUnimplemented)
+	ErrorParam                 = Error(C.errSecParam)
+	ErrorAllocate              = Error(C.errSecAllocate)
+	ErrorNotAvailable          = Error(C.errSecNotAvailable)
+	ErrorAuthFailed            = Error(C.errSecAuthFailed)
+	ErrorDuplicateItem         = Error(C.errSecDuplicateItem)
+	ErrorItemNotFound          = Error(C.errSecItemNotFound)
+	ErrorInteractionNotAllowed = Error(C.errSecInteractionNotAllowed)
+	ErrorDecode                = Error(C.errSecDecode)
+)
+
+func checkError(errCode C.OSStatus) error {
+	if errCode == C.errSecSuccess {
+		return nil
+	}
+	return Error(errCode)
+}
+
+func (k Error) Error() string {
+	var msg string
+	// SecCopyErrorMessageString is only available on OSX, so derive manually.
+	switch k {
+	case ErrorItemNotFound:
+		msg = fmt.Sprintf("Item not found (%d)", k)
+	case ErrorDuplicateItem:
+		msg = fmt.Sprintf("Duplicate item (%d)", k)
+	case ErrorParam:
+		msg = fmt.Sprintf("One or more parameters passed to the function were not valid (%d)", k)
+	case -25243:
+		msg = fmt.Sprintf("No access for item (%d)", k)
+	default:
+		msg = fmt.Sprintf("Keychain Error (%d)", k)
+	}
+	return msg
+}
+
+var (
+	SecClassKey    = attrKey(C.CFTypeRef(C.kSecClass))
+	ServiceKey     = attrKey(C.CFTypeRef(C.kSecAttrService))
+	AccountKey     = attrKey(C.CFTypeRef(C.kSecAttrAccount))
+	MatchLimitKey  = attrKey(C.CFTypeRef(C.kSecMatchLimit))
+	ReturnDataKey  = attrKey(C.CFTypeRef(C.kSecReturnData))
+	AccessGroupKey = attrKey(C.CFTypeRef(C.kSecAttrAccessGroup))
+	LabelKey       = attrKey(C.CFTypeRef(C.kSecAttrLabel))
+	DataKey        = attrKey(C.CFTypeRef(C.kSecValueData))
+)
+
+// QueryResult stores all possible results from queries.
+// Not all fields are applicable all the time. Results depend on query.
+type QueryResult struct {
+	Service     string
+	Account     string
+	AccessGroup string
+	Label       string
+	Data        []byte
+}
+
+type Query map[string]interface{}
+
+// Keyring represents a keyring object
+type Keyring struct{}
+
+func GetMacKeyringPassword(service string, account string) ([]byte, error) {
+	query := make(Query)
+
+	query[SecClassKey] = C.CFTypeRef(C.kSecClassGenericPassword)
+	query[ServiceKey] = service
+	query[AccountKey] = account
+	query[MatchLimitKey] = C.CFTypeRef(C.kSecMatchLimitOne)
+	query[ReturnDataKey] = true
+
+	results, err := QueryItem(query)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) > 1 {
+		return nil, fmt.Errorf("Too many results")
+	}
+	if len(results) == 1 {
+		return results[0].Data, nil
+	}
+	return nil, nil
+}
+
+// QueryItem returns a list of query results.
+func QueryItem(item Query) ([]QueryResult, error) {
+	cfDict, err := ConvertMapToCFDictionary(item)
+	if err != nil {
+		return nil, err
+	}
+	defer Release(C.CFTypeRef(cfDict))
+
+	var resultsRef C.CFTypeRef
+	errCode := C.SecItemCopyMatching(cfDict, &resultsRef)
+	if Error(errCode) == ErrorItemNotFound {
+		return nil, nil
+	}
+	err = checkError(errCode)
+	if err != nil {
+		return nil, err
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if resultsRef == nil {
+		return nil, nil
+	}
+	defer Release(resultsRef)
+
+	results := make([]QueryResult, 0, 1)
+
+	typeID := C.CFGetTypeID(resultsRef)
+	if typeID == C.CFArrayGetTypeID() {
+		arr := CFArrayToArray(C.CFArrayRef(resultsRef))
+		for _, ref := range arr {
+			typeID := C.CFGetTypeID(ref)
+			if typeID == C.CFDictionaryGetTypeID() {
+				item, err := convertResult(C.CFDictionaryRef(ref))
+				if err != nil {
+					return nil, err
+				}
+				results = append(results, *item)
+			} else {
+				return nil, fmt.Errorf("Invalid result type (If you SetReturnRef(true) you should use QueryItemRef directly).")
+			}
+		}
+	} else if typeID == C.CFDictionaryGetTypeID() {
+		item, err := convertResult(C.CFDictionaryRef(resultsRef))
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *item)
+	} else if typeID == C.CFDataGetTypeID() {
+		b, err := CFDataToBytes(C.CFDataRef(resultsRef))
+		if err != nil {
+			return nil, err
+		}
+		item := QueryResult{Data: b}
+		results = append(results, item)
+	} else {
+		return nil, fmt.Errorf("Invalid result type: %s", CFTypeDescription(resultsRef))
+	}
+
+	return results, nil
+}
+
+func convertResult(d C.CFDictionaryRef) (*QueryResult, error) {
+	m := CFDictionaryToMap(C.CFDictionaryRef(d))
+	result := QueryResult{}
+	for k, v := range m {
+		switch attrKey(k) {
+		case ServiceKey:
+			result.Service = CFStringToString(C.CFStringRef(v))
+		case AccountKey:
+			result.Account = CFStringToString(C.CFStringRef(v))
+		case AccessGroupKey:
+			result.AccessGroup = CFStringToString(C.CFStringRef(v))
+		case LabelKey:
+			result.Label = CFStringToString(C.CFStringRef(v))
+		case DataKey:
+			b, err := CFDataToBytes(C.CFDataRef(v))
+			if err != nil {
+				return nil, err
+			}
+			result.Data = b
+			// default:
+			// fmt.Printf("Unhandled key in conversion: %v = %v\n", cfTypeValue(k), cfTypeValue(v))
+		}
+	}
+	return &result, nil
+}
+
+// Core functions
+
+// GetVersion get keyring version
+func GetVersion() uint32 {
+	var versionRef C.UInt32
+	C.SecKeychainGetVersion(&versionRef)
+	return uint32(versionRef)
+}
+
+// Get an attribute key
+func attrKey(ref C.CFTypeRef) string {
+	return CFStringToString(C.CFStringRef(ref))
+}
 
 // Release release resources
 func Release(ref C.CFTypeRef) {

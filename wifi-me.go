@@ -5,74 +5,62 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-
-	keyring "github.com/nickvdyck/wifi-me/keyring"
 )
 
-// AIRPORTSERVICE write some more docs
-const AIRPORTSERVICE string = "AirPort"
+// AIRPORTKEYRINGREF write some more docs
+const AIRPORTKEYRINGREF = "AirPort"
 
 // AIRPORTCMD write some more docs
-const AIRPORTCMD string = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+const AIRPORTCMD = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
 
 func main() {
 
-	version := keyring.GetVersion()
+	version := GetVersion()
 
-	fmt.Println(version)
+	// var list = flag.Bool("list", false, "list all ssid that are saved in your keychain account")
 
-	var list = flag.Bool("list", false, "list all ssid that are saved in your keychain account")
+	var ssid = flag.String("ssid", getCurrentSSID(), "Get the password for the given ssid, defaults to your currently selected wifi hotspot.")
 
 	flag.Parse()
 
-	if *list {
-		accounts, err := keyring.GetGenericPasswordAccounts(AIRPORTSERVICE)
+	fmt.Printf("Currently using the following version %s \n", version)
 
-		if err != nil {
-			//handle error
-			return
-		}
+	// if *list {
+	// 	accounts, err := keyring.GetGenericPasswordAccounts(AIRPORTKEYRINGREF)
 
-		for _, account := range accounts {
-			fmt.Println(account)
-		}
-	} else {
+	// 	if err != nil {
+	// 		//handle error
+	// 		return
+	// 	}
 
-		result, _ := exec.Command(AIRPORTCMD, "-I").Output()
-		re := regexp.MustCompile(` SSID: ([\w,-]*)`)
-
-		matches := re.FindStringSubmatch(string(result))
-
-		ssid := matches[1]
-
-		// ssid = "ALICUDI"
-
-		fmt.Println("Getting wifi password for ssid: " + ssid)
-		password, _ := getPasswordForSSID(ssid)
-		fmt.Println(password)
-	}
+	// 	for _, account := range accounts {
+	// 		fmt.Println(account)
+	// 	}
+	// } else {
+	fmt.Println("Getting wifi password for ssid: " + *ssid)
+	password, _ := getPasswordForSSID(ssid)
+	fmt.Println(password)
+	// }
 }
 
-func getPasswordForSSID(ssid string) (string, error) {
-	query := keyring.NewItem()
-	query.SetSecClass(keyring.SecClassGenericPassword)
-	query.SetService(AIRPORTSERVICE)
-	query.SetAccount(ssid)
-	query.SetMatchLimit(keyring.MatchLimitOne)
-	query.SetReturnData(true)
+func getCurrentSSID() string {
+	result, _ := exec.Command(AIRPORTCMD, "-I").Output()
+	re := regexp.MustCompile(` SSID: ([\w,-]*)`)
 
-	results, err := keyring.QueryItem(query)
+	matches := re.FindStringSubmatch(string(result))
+
+	ssid := matches[1]
+
+	return ssid
+}
+
+func getPasswordForSSID(ssid *string) (string, error) {
+	result, err := GetMacKeyringPassword(AIRPORTKEYRINGREF, *ssid)
 
 	if err != nil {
-		fmt.Println(err)
 		return "", err
-	} else if len(results) != 1 {
-		fmt.Println("no results")
-		// Not found
-		return "", nil
-	} else {
-		password := string(results[0].Data)
-
-		return password, nil
 	}
+
+	password := string(result)
+	return password, nil
 }
