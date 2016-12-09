@@ -59,14 +59,15 @@ func (k Error) Error() string {
 }
 
 var (
-	SecClassKey    = attrKey(C.CFTypeRef(C.kSecClass))
-	ServiceKey     = attrKey(C.CFTypeRef(C.kSecAttrService))
-	AccountKey     = attrKey(C.CFTypeRef(C.kSecAttrAccount))
-	MatchLimitKey  = attrKey(C.CFTypeRef(C.kSecMatchLimit))
-	ReturnDataKey  = attrKey(C.CFTypeRef(C.kSecReturnData))
-	AccessGroupKey = attrKey(C.CFTypeRef(C.kSecAttrAccessGroup))
-	LabelKey       = attrKey(C.CFTypeRef(C.kSecAttrLabel))
-	DataKey        = attrKey(C.CFTypeRef(C.kSecValueData))
+	SecClassKey         = attrKey(C.CFTypeRef(C.kSecClass))
+	ServiceKey          = attrKey(C.CFTypeRef(C.kSecAttrService))
+	AccountKey          = attrKey(C.CFTypeRef(C.kSecAttrAccount))
+	MatchLimitKey       = attrKey(C.CFTypeRef(C.kSecMatchLimit))
+	ReturnDataKey       = attrKey(C.CFTypeRef(C.kSecReturnData))
+	ReturnAttributesKey = attrKey(C.CFTypeRef(C.kSecReturnAttributes))
+	AccessGroupKey      = attrKey(C.CFTypeRef(C.kSecAttrAccessGroup))
+	LabelKey            = attrKey(C.CFTypeRef(C.kSecAttrLabel))
+	DataKey             = attrKey(C.CFTypeRef(C.kSecValueData))
 )
 
 // QueryResult stores all possible results from queries.
@@ -104,6 +105,27 @@ func GetMacKeyringPassword(service string, account string) ([]byte, error) {
 		return results[0].Data, nil
 	}
 	return nil, nil
+}
+
+func GetGenericPasswordAccounts(service string) ([]string, error) {
+	query := make(Query)
+	query[SecClassKey] = C.CFTypeRef(C.kSecClassGenericPassword)
+	query[ServiceKey] = service
+	query[MatchLimitKey] = C.CFTypeRef(C.kSecMatchLimitAll)
+	query[ReturnAttributesKey] = true
+
+	results, err := QueryItem(query)
+
+	if err != nil {
+		return nil, err
+	}
+
+	accounts := make([]string, 0, len(results))
+	for _, r := range results {
+		accounts = append(accounts, r.Account)
+	}
+
+	return accounts, nil
 }
 
 // QueryItem returns a list of query results.

@@ -17,7 +17,7 @@ func main() {
 
 	version := GetVersion()
 
-	// var list = flag.Bool("list", false, "list all ssid that are saved in your keychain account")
+	var list = flag.Bool("list", false, "list all ssid that are saved in your keychain account")
 
 	var ssid = flag.String("ssid", getCurrentSSID(), "Get the password for the given ssid, defaults to your currently selected wifi hotspot.")
 
@@ -25,22 +25,23 @@ func main() {
 
 	fmt.Printf("Currently using the following version %s \n", version)
 
-	// if *list {
-	// 	accounts, err := keyring.GetGenericPasswordAccounts(AIRPORTKEYRINGREF)
+	if *list {
+		accounts, err := GetGenericPasswordAccounts(AIRPORTKEYRINGREF)
 
-	// 	if err != nil {
-	// 		//handle error
-	// 		return
-	// 	}
+		if err != nil {
+			// properly handle error
+			fmt.Println(err)
+			return
+		}
 
-	// 	for _, account := range accounts {
-	// 		fmt.Println(account)
-	// 	}
-	// } else {
-	fmt.Println("Getting wifi password for ssid: " + *ssid)
-	password, _ := getPasswordForSSID(ssid)
-	fmt.Println(password)
-	// }
+		for _, account := range accounts {
+			fmt.Println(account)
+		}
+	} else {
+		fmt.Println("Getting wifi password for ssid: " + *ssid)
+		password, _ := getPasswordForSSID(ssid)
+		fmt.Println(password)
+	}
 }
 
 func getCurrentSSID() string {
